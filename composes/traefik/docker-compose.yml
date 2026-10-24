@@ -1,7 +1,8 @@
 # Traefik v3 atrás da Cloudflare, com Authenticated Origin Pulls (mTLS).
 #
 # - Só a porta 443: o redirecionamento HTTP→HTTPS fica na borda da Cloudflare (Always Use HTTPS).
-# - Certificado de origem: Cloudflare Origin CA (sem ACME), copiado à mão para ./origin/ (origin.pem + origin.key).
+# - Certificados de origem: Cloudflare Origin CA (sem ACME), um por domínio, copiados à mão para ./origin/
+#   (cert1.pem + cert1.key, cert2.*, cert3.*).
 # - Só aceita tráfego da Cloudflare: ipAllowList + certificado de cliente da Cloudflare (mTLS) + sniStrict.
 # - IP real do visitante: forwardedHeaders.trustedIPs com as faixas da Cloudflare (+ Transform Rule X-Real-IP).
 # - O socket do Docker fica atrás de um proxy somente leitura, numa rede interna sem saída para a internet.
@@ -67,7 +68,7 @@ services:
       - proxy
       - socket
     volumes:
-      # Certificado de origem da Cloudflare (origin.pem + origin.key), copiado à mão; a chave nunca vai para o Git.
+      # Certificados de origem da Cloudflare (certN.pem + certN.key), copiados à mão; as chaves nunca vão para o Git.
       - ./origin:/etc/traefik/origin:ro
     configs:
       - source: traefik-dynamic
@@ -132,11 +133,16 @@ configs:
               stsIncludeSubdomains: false
               stsPreload: false
       tls:
-        # Certificado de origem da Cloudflare (Origin CA). Fica em "certificates" (não só como padrão do store)
-        # porque o sniStrict só aceita SNI que case com um certificado desta lista.
+        # Certificados de origem da Cloudflare (Origin CA), um por domínio (zona): o Traefik escolhe pelo SNI.
+        # Ficam em "certificates" (não só como padrão do store) porque o sniStrict só aceita SNI que case com um
+        # certificado desta lista. Para mais domínios, acrescente cert4, cert5... aqui e os arquivos em ./origin/.
         certificates:
-          - certFile: /etc/traefik/origin/origin.pem
-            keyFile: /etc/traefik/origin/origin.key
+          - certFile: /etc/traefik/origin/cert1.pem
+            keyFile: /etc/traefik/origin/cert1.key
+          - certFile: /etc/traefik/origin/cert2.pem
+            keyFile: /etc/traefik/origin/cert2.key
+          - certFile: /etc/traefik/origin/cert3.pem
+            keyFile: /etc/traefik/origin/cert3.key
         options:
           default:
             minVersion: VersionTLS12
