@@ -5,7 +5,7 @@
 #   ./origin/ no servidor (<domínio>.pem + <domínio>.key, nomes em ORIGIN_CERT_1..3 no .env, e aop-ca.pem),
 #   copiados à mão; nada disso vai para o Git.
 # - Só aceita tráfego da Cloudflare: ipAllowList + certificado de cliente da Cloudflare (mTLS) + sniStrict.
-# - IP real do visitante: forwardedHeaders.trustedIPs com as faixas da Cloudflare (+ Transform Rule X-Real-IP).
+# - IP real do visitante: forwardedHeaders.trustedIPs com as faixas da Cloudflare; as aplicações leem CF-Connecting-IP.
 # - O socket do Docker fica atrás de um proxy somente leitura, numa rede interna sem saída para a internet.
 # - Serviços publicados entram pela rede externa "proxy" com labels traefik.* (exposedByDefault=false).
 # - A configuração dinâmica vai embutida (configs), para deploy por URL; os valores ajustáveis vêm do .env
