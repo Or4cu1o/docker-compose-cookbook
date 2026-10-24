@@ -11,12 +11,24 @@ Sem porta 80: o redirecionamento HTTP→HTTPS é feito na borda da Cloudflare, e
 
 Também traz: imagens fixadas por digest, socket do Docker atrás de um proxy somente leitura (rede interna), `cap_drop: ALL`, `no-new-privileges`, IP real do visitante (`forwardedHeaders.trustedIPs`), `aliasHeadersStrategy=delete`, HSTS, TLS ≥ 1.2, healthcheck e log de acesso em JSON. WebSocket funciona sem configuração extra.
 
-A configuração dinâmica e a CA pública do mTLS vão embutidas no compose (`configs`), para deploy por URL. Copiados à mão para o diretório do projeto: o `.env` (opcional) e os certificados de origem (um por domínio).
+O compose é genérico: não tem certificado, chave nem IP embutido. A configuração dinâmica vai em `configs` (deploy por URL) e lê os valores do `.env`. O que é do seu ambiente fica no servidor, copiado à mão:
+
+```
+<diretório do projeto>/
+├── docker-compose.yml   ← do GitHub (deploy por URL)
+├── .env                 ← copiado de .env.example e ajustado
+└── origin/              ← chmod 700; arquivos .key com chmod 600
+    ├── aop-ca.pem       ← CA pública do Authenticated Origin Pulls
+    ├── cert1.pem  cert1.key
+    ├── cert2.pem  cert2.key
+    └── cert3.pem  cert3.key
+```
 
 ## Deploy
 
+0. Copie `.env.example` para `.env` e ajuste se precisar. Coloque em `origin/aop-ca.pem` o certificado **público** da CA que assina o certificado de cliente do Authenticated Origin Pulls.
 1. **Certificados de origem (um por domínio/zona):** em cada zona, Cloudflare → SSL/TLS → Origin Server → **Create Certificate** (hostnames `dominio.com` e `*.dominio.com`). Salve no diretório do projeto como `origin/cert1.pem` + `origin/cert1.key`, `origin/cert2.*` e `origin/cert3.*` (chaves com `chmod 600`; nunca vão para o Git). O Traefik escolhe o certificado pelo hostname. Para mais domínios, acrescente `cert4`… na lista `tls.certificates` do compose.
-2. **Authenticated Origin Pulls, em cada zona:** Cloudflare → SSL/TLS → Origin Server → Authenticated Origin Pulls → **Zone-level** → **Upload certificate** com o certificado de cliente e a chave dele (assinados pela CA embutida no compose; o mesmo par serve para todas as zonas) e ligue o toggle.
+2. **Authenticated Origin Pulls, em cada zona:** Cloudflare → SSL/TLS → Origin Server → Authenticated Origin Pulls → **Zone-level** → **Upload certificate** com o certificado de cliente e a chave dele (assinados pela CA de `origin/aop-ca.pem`; o mesmo par serve para todas as zonas) e ligue o toggle.
 3. Ajuste o resto da Cloudflare (tabela abaixo, **em cada zona**) e o firewall do provedor (só 443, só faixas da Cloudflare).
 4. `docker compose up -d` (ou deploy pela URL deste `docker-compose.yml`).
 
@@ -57,8 +69,8 @@ A entrada 443, o TLS e os middlewares `cloudflare-only` e `secure-headers` já v
 
 ## Manutenção
 
-- **Faixas da Cloudflare:** ao mudarem, atualize o `sourceRange` em `configs.traefik-dynamic` e o padrão de `CF_TRUSTED_IPS` no `command`.
+- **Faixas da Cloudflare:** ao mudarem, atualize `CF_TRUSTED_IPS` no `.env` (uma lista só, usada pelo bloqueio de IP e pela confiança no IP real) e recrie o container.
 - **Certificados de origem:** valem o prazo escolhido na criação (até 15 anos); para trocar, substitua os arquivos em `origin/` (o Traefik recarrega a configuração dinâmica; se não pegar, reinicie).
 - **mTLS:** o certificado de cliente vence em 2028-10-23 (a Cloudflare avisa 30 e 14 dias antes). Emita outro com a mesma CA e troque na Cloudflare. A chave da CA fica fora do servidor e fora deste repositório.
-- **Outra CA:** gere a sua (veja a [documentação da Cloudflare](https://developers.cloudflare.com/ssl/origin-configuration/authenticated-origin-pull/set-up/zone-level/)) e troque o bloco `configs.cloudflare-aop-ca`.
+- **Outra CA:** gere a sua (veja a [documentação da Cloudflare](https://developers.cloudflare.com/ssl/origin-configuration/authenticated-origin-pull/set-up/zone-level/)) e troque `origin/aop-ca.pem`.
 - **Atualizar o Traefik:** troque a tag e o digest da imagem.
