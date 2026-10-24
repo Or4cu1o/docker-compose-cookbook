@@ -15,6 +15,7 @@ name: traefik
 
 services:
   socket-proxy:
+    container_name: traefik-socket-proxy
     image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
     restart: unless-stopped
     environment:
@@ -34,6 +35,7 @@ services:
         max-file: "3"
 
   traefik:
+    container_name: traefik
     image: traefik:v3.7.16@sha256:c8a121e4bb1347e8fd52657fab12f2cb70b68f8a018895e2068f92c9e519b9c2
     restart: unless-stopped
     depends_on:
