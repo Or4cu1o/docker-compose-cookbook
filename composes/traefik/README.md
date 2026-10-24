@@ -9,7 +9,7 @@ Proxy reverso (Traefik v3) para uma VPS com o domínio na Cloudflare. Só a port
 
 Sem porta 80: o redirecionamento HTTP→HTTPS é feito na borda da Cloudflare, e o certificado de origem é o **Cloudflare Origin CA** (sem ACME/Let's Encrypt).
 
-Também traz: imagens fixadas por digest, socket do Docker atrás de um proxy somente leitura (rede interna), `cap_drop: ALL`, `no-new-privileges`, IP real do visitante (`forwardedHeaders.trustedIPs`), `aliasHeadersStrategy=delete`, HSTS, TLS ≥ 1.2, healthcheck e log de acesso em JSON. WebSocket funciona sem configuração extra.
+Também traz: imagens fixadas por digest, socket do Docker atrás de um proxy somente leitura (rede interna), `cap_drop: ALL`, `no-new-privileges`, IP real do visitante (`forwardedHeaders.trustedIPs` + `CF-Connecting-IP`), `aliasHeadersStrategy=delete`, HSTS, TLS ≥ 1.2, healthcheck e log de acesso em JSON. WebSocket funciona sem configuração extra.
 
 O compose é genérico: não tem certificado, chave nem IP embutido. A configuração dinâmica vai em `configs` (deploy por URL) e lê os valores do `.env`. O que é do seu ambiente fica no servidor, copiado à mão:
 
@@ -43,8 +43,9 @@ Faça os passos 1 e 2 **antes** de subir: sem o certificado de origem ou com o t
 | SSL/TLS → Origin Server | certificado de origem (passo 1) e Authenticated Origin Pulls **Zone-level** ligado (passo 2) |
 | DNS | registro **A** para o IPv4 da VPS, **Proxied**; **sem AAAA** para a VPS (o Docker sem IPv6 troca o IP de origem e o `ipAllowList` bloquearia) |
 | Network | **WebSockets: ON** |
-| Rules → Transform Rules → Modify Request Header | **Set** `X-Real-IP` = dinâmico `ip.src` |
 | Speed / Scrape Shield | **Rocket Loader: OFF** · **Email Obfuscation: OFF** |
+
+**IP real do visitante:** a Cloudflare não permite regras sobre `X-Real-IP`/`X-Forwarded-For`; ela sempre envia `CF-Connecting-IP` com o IP do visitante. Como a origem só aceita a Cloudflare, as aplicações podem confiar nesse cabeçalho. O próprio Traefik registra o IP real no log de acesso (`ClientHost`), via `forwardedHeaders.trustedIPs`.
 
 ## Publicar um serviço
 
