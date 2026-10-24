@@ -1,0 +1,200 @@
+# Traefik v3 atrás da Cloudflare, com Authenticated Origin Pulls (mTLS).
+#
+# - Só aceita tráfego da Cloudflare: ipAllowList nas portas 80/443 + certificado de cliente da Cloudflare no 443.
+# - IP real do visitante: forwardedHeaders.trustedIPs com as faixas da Cloudflare (+ Transform Rule X-Real-IP).
+# - O socket do Docker fica atrás de um proxy somente leitura, numa rede interna sem saída para a internet.
+# - Serviços publicados entram pela rede externa "proxy" com labels traefik.* (exposedByDefault=false).
+# - Autossuficiente: a configuração dinâmica e a CA pública do mTLS vão embutidas (configs), para deploy por URL.
+#   (por isso sem read_only: o Compose não monta configs embutidos em serviço read_only)
+#
+# Variáveis: veja .env.example. Guia completo: README.md desta pasta.
+services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    restart: unless-stopped
+    environment:
+      # Só leitura de containers (o que o provider do Traefik precisa); POST e o resto ficam negados.
+      CONTAINERS: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - socket
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  traefik:
+    image: traefik:v3.7.16@sha256:c8a121e4bb1347e8fd52657fab12f2cb70b68f8a018895e2068f92c9e519b9c2
+    restart: unless-stopped
+    depends_on:
+      - socket-proxy
+    command:
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+      - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
+      - --accesslog=true
+      - --accesslog.format=json
+      - --api.dashboard=false
+      - --ping=true
+      # Entrada interna só do ping/healthcheck (porta 8080, não publicada)
+      - --entrypoints.traefik.address=:8080
+      - --entrypoints.traefik.http.aliasheadersstrategy=delete
+      # Provedores
+      - --providers.docker=true
+      - --providers.docker.endpoint=tcp://socket-proxy:2375
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy
+      - --providers.file.directory=/etc/traefik/dynamic
+      # HTTP (80): só redireciona para HTTPS e atende o desafio do Let's Encrypt
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.forwardedheaders.trustedips=${CF_TRUSTED_IPS:-173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22,2400:cb00::/32,2606:4700::/32,2803:f800::/32,2405:b500::/32,2405:8100::/32,2a06:98c0::/29,2c0f:f248::/32}
+      - --entrypoints.web.http.aliasheadersstrategy=delete
+      - --entrypoints.web.http.middlewares=cloudflare-only@file
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      # HTTPS (443): entrada padrão dos serviços (WebSocket funciona sem configuração extra)
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.asdefault=true
+      - --entrypoints.websecure.forwardedheaders.trustedips=${CF_TRUSTED_IPS:-173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22,2400:cb00::/32,2606:4700::/32,2803:f800::/32,2405:b500::/32,2405:8100::/32,2a06:98c0::/29,2c0f:f248::/32}
+      - --entrypoints.websecure.http.aliasheadersstrategy=delete
+      - --entrypoints.websecure.http.middlewares=cloudflare-only@file,secure-headers@file
+      - --entrypoints.websecure.http.tls.certresolver=letsencrypt
+      # Certificado de origem (Let's Encrypt, desafio HTTP pela Cloudflare)
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?defina ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - proxy
+      - socket
+    volumes:
+      - letsencrypt:/letsencrypt
+    configs:
+      - source: traefik-dynamic
+        target: /etc/traefik/dynamic/cloudflare.yml
+      - source: cloudflare-aop-ca
+        target: /etc/traefik/certs/aop-ca.pem
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+configs:
+  # Faixas da Cloudflare: https://www.cloudflare.com/ips/ (conferidas em 2026-10-24).
+  # Ao atualizar, mude também o padrão de CF_TRUSTED_IPS no command acima.
+  traefik-dynamic:
+    content: |
+      http:
+        middlewares:
+          cloudflare-only:
+            ipAllowList:
+              sourceRange:
+                - "173.245.48.0/20"
+                - "103.21.244.0/22"
+                - "103.22.200.0/22"
+                - "103.31.4.0/22"
+                - "141.101.64.0/18"
+                - "108.162.192.0/18"
+                - "190.93.240.0/20"
+                - "188.114.96.0/20"
+                - "197.234.240.0/22"
+                - "198.41.128.0/17"
+                - "162.158.0.0/15"
+                - "104.16.0.0/13"
+                - "104.24.0.0/14"
+                - "172.64.0.0/13"
+                - "131.0.72.0/22"
+                - "2400:cb00::/32"
+                - "2606:4700::/32"
+                - "2803:f800::/32"
+                - "2405:b500::/32"
+                - "2405:8100::/32"
+                - "2a06:98c0::/29"
+                - "2c0f:f248::/32"
+          secure-headers:
+            headers:
+              contentTypeNosniff: true
+              referrerPolicy: strict-origin-when-cross-origin
+              stsSeconds: 31536000
+              stsIncludeSubdomains: false
+              stsPreload: false
+      tls:
+        options:
+          default:
+            minVersion: VersionTLS12
+            sniStrict: true
+            # Authenticated Origin Pulls (zone-level): só aceita HTTPS com o certificado de cliente
+            # assinado pela CA abaixo, carregado na Cloudflare.
+            clientAuth:
+              caFiles:
+                - /etc/traefik/certs/aop-ca.pem
+              clientAuthType: RequireAndVerifyClientCert
+  # Certificado PÚBLICO da CA própria do Authenticated Origin Pulls (a chave privada nunca entra aqui).
+  # Para usar outra CA, troque este bloco pelo seu certificado (veja o README).
+  cloudflare-aop-ca:
+    content: |
+        -----BEGIN CERTIFICATE-----
+        MIIFsDCCA5igAwIBAgIUW8GrbNNqtcYybbNcNKdG+CuNnKAwDQYJKoZIhvcNAQEL
+        BQAwXjEYMBYGA1UECgwPRW1waXJlQ29tbXVuaXR5MRMwEQYDVQQLDApFbXBpcmVN
+        dXNlMS0wKwYDVQQDDCRFbXBpcmVNdXNlIENsb3VkZmxhcmUgT3JpZ2luIFB1bGwg
+        Q0EwHhcNMjYxMDI0MjIwNzU3WhcNMzExMDI0MjIwNzU3WjBeMRgwFgYDVQQKDA9F
+        bXBpcmVDb21tdW5pdHkxEzARBgNVBAsMCkVtcGlyZU11c2UxLTArBgNVBAMMJEVt
+        cGlyZU11c2UgQ2xvdWRmbGFyZSBPcmlnaW4gUHVsbCBDQTCCAiIwDQYJKoZIhvcN
+        AQEBBQADggIPADCCAgoCggIBALMZzbOEXaYwr1AkNvQnqdWa1bF7s/wVlzsvQMVW
+        D06aDw4fvMZnlEUM4nEFVBhKXkl1ZY/xSvMIUslHl/nOniyoCLLGgrQWbFjtgUKk
+        7tAP3oc2M3TegdLI2UbFoAtmGRUuB9vg7mUuKqb4/V+ysVi73gUGJ1zYY6ZJ0CHc
+        aZIoUSz7STPxAiAHHvGxtCeyvkr6aprH57QNT7QqN5ko1Z6yvRnafSXvLTdZqrPQ
+        GCIhWgToQ05lYsTbvRW+1Ca6NA+vshx2d4q0R45OBw7fPUH2Yl27oXHAZpZwQVB9
+        bYFJvqMs18Pbze/X5hpG6GnXsIFrRIC8DY8XiW33C/wVc8MyHH7sC5SZum9nzWjt
+        /1bfX7YskQTXoNI2XyzypIaSzOuH8649lwTeK+e2AYy5zTPf6pMDpKGIYdVTgbxs
+        pLASKkCJg3QseHKT13tOvXbmoc5Y3nuKF6X1pl01LRp5y5Agpq79oOdrEwKAImvS
+        6theQBb+LIlw/iB+qSk19BHHPA8gTJhtwkQT1A2JaMYT/wk+4B+fZcOG/2jUfFPc
+        F8eRKmyPBSkiRWsnom2pbX1s9kA5/H1z0R5BvjZAZHrtqPrq4tA2pI/gd8E9ThhH
+        uZYnWOJqkA9kwC4qwd1jnI9VjRDEUsfxqossSigpdDG/AiYd25V6kR2HR0wak7l4
+        pPWhAgMBAAGjZjBkMB0GA1UdDgQWBBR8sH2h10hBTSWyc/LeW7Lg8JtmajAfBgNV
+        HSMEGDAWgBR8sH2h10hBTSWyc/LeW7Lg8JtmajASBgNVHRMBAf8ECDAGAQH/AgEA
+        MA4GA1UdDwEB/wQEAwIBBjANBgkqhkiG9w0BAQsFAAOCAgEAllD/iWBNpt7+SfvI
+        TP2pVQ+xlDikKNuLba8VC4TUkJdmGKFCTRmHO6KtTdcpF/xULWfq+ltOPXGm9WzC
+        TiUB9whS/5OodKM5/1MaQ+EpTZBAV3Dgs/pvVjCY8Yq0iuioqxBlBQDjg5uS590U
+        dpbmZadFPTjfkvivvo6nMyMII0f+gkGFUB/4Aippm109aCFY8zyp99KdK6zLOmmq
+        fgT0v4SHVQmFjvXndd3PUtwyz6sEvw/TyZMhI9+6gfFA3NCRHkMplO96/tKbP6gt
+        Qa40TZrIuIst1bza1+8qgLfOlm9MGY340xURpEBhjoojvAWA7G0Aa8apZzjCtDWz
+        lMrFzozQONwvLBW/2yS1Qqojlhm5JU8aR+5nMb5iG8MEZRzZrxOYLKYECSkRWbYo
+        LRgj0ygEQEc9UlrHh3E94V1O0y/nvSWeRbSIcn4FfneXBbh0iKTmP3GYFgp353rf
+        bIjNg6Gn0QPxrE69kVrO/5bAvaZ58XXZ1CyR4+rca5P3mUfZJCiAdgxjlBfy0wUl
+        xUti1LdZdjNJRa5iQW8AS8kCnUPFawGzNfRXj7hiiy2VKug5g74htJq+RU31pQHv
+        AnSe8qtbDRRoVRDXJjDMg5L7D2rFzUe+WUThJyeKNVhOmEKrNG6WeJplz57/fTbx
+        aLK/0FrHw4lFHb/g0uxf1MLfXZw=
+        -----END CERTIFICATE-----
+
+networks:
+  # Rede compartilhada com os serviços publicados: declare-a como external no compose deles.
+  proxy:
+    name: proxy
+  # Rede só entre o Traefik e o proxy do socket (sem saída para a internet).
+  socket:
+    internal: true
+
+volumes:
+  letsencrypt:
