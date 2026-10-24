@@ -58,7 +58,7 @@ services:
       # HTTPS (443): única entrada pública e padrão dos serviços (WebSocket funciona sem configuração extra)
       - --entrypoints.websecure.address=:443
       - --entrypoints.websecure.asdefault=true
-      - --entrypoints.websecure.forwardedheaders.trustedips=${CF_TRUSTED_IPS:?defina CF_TRUSTED_IPS no .env}
+      - --entrypoints.websecure.forwardedheaders.trustedips=${CF_IPS_V4:?defina CF_IPS_V4 no .env},${CF_IPS_V6:?defina CF_IPS_V6 no .env}
       - --entrypoints.websecure.http.aliasheadersstrategy=delete
       - --entrypoints.websecure.http.middlewares=cloudflare-only@file,secure-headers@file
       - --entrypoints.websecure.http.tls=true
@@ -93,14 +93,14 @@ services:
         max-file: "3"
 
 configs:
-  # Os valores vêm do .env: CF_TRUSTED_IPS (mesma lista do trustedIPs), HSTS_SECONDS e TLS_MIN_VERSION.
+  # Os valores vêm do .env: CF_IPS_V4 e CF_IPS_V6 (mesmas listas do trustedIPs), HSTS_SECONDS e TLS_MIN_VERSION.
   traefik-dynamic:
     content: |
       http:
         middlewares:
           cloudflare-only:
             ipAllowList:
-              sourceRange: [${CF_TRUSTED_IPS}]
+              sourceRange: [${CF_IPS_V4},${CF_IPS_V6}]
           secure-headers:
             headers:
               contentTypeNosniff: true
