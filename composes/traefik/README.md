@@ -18,16 +18,16 @@ O compose é genérico: não tem certificado, chave nem IP embutido. A configura
 ├── docker-compose.yml   ← do GitHub (deploy por URL)
 ├── .env                 ← copiado de .env.example e ajustado
 └── origin/              ← chmod 700; arquivos .key com chmod 600
-    ├── aop-ca.pem       ← CA pública do Authenticated Origin Pulls
-    ├── cert1.pem  cert1.key
-    ├── cert2.pem  cert2.key
-    └── cert3.pem  cert3.key
+    ├── aop-ca.pem                  ← CA pública do Authenticated Origin Pulls
+    ├── dominio1.com.pem  dominio1.com.key
+    ├── dominio2.com.pem  dominio2.com.key
+    └── dominio3.com.pem  dominio3.com.key
 ```
 
 ## Deploy
 
 0. Copie `.env.example` para `.env` e ajuste se precisar (em painéis que pedem as variáveis num formulário, cole só as linhas `NOME=valor`, sem os comentários). Coloque em `origin/aop-ca.pem` o certificado **público** da CA que assina o certificado de cliente do Authenticated Origin Pulls.
-1. **Certificados de origem (um por domínio/zona):** em cada zona, Cloudflare → SSL/TLS → Origin Server → **Create Certificate** (hostnames `dominio.com` e `*.dominio.com`). Salve no diretório do projeto como `origin/cert1.pem` + `origin/cert1.key`, `origin/cert2.*` e `origin/cert3.*` (chaves com `chmod 600`; nunca vão para o Git). O Traefik escolhe o certificado pelo hostname. Para mais domínios, acrescente `cert4`… na lista `tls.certificates` do compose.
+1. **Certificados de origem (um por domínio/zona):** em cada zona, Cloudflare → SSL/TLS → Origin Server → **Create Certificate** (hostnames `dominio.com` e `*.dominio.com`). Formato **PEM**, chave **ECC**. Salve no diretório do projeto como `origin/<domínio>.pem` (certificado) + `origin/<domínio>.key` (chave; `chmod 600`; nunca vai para o Git) e ponha os três nomes em `ORIGIN_CERT_1`, `ORIGIN_CERT_2` e `ORIGIN_CERT_3` no `.env`. O Traefik escolhe o certificado pelo hostname. Para mais domínios, acrescente `ORIGIN_CERT_4`… na lista `tls.certificates` do compose e no `.env`.
 2. **Authenticated Origin Pulls, em cada zona:** Cloudflare → SSL/TLS → Origin Server → Authenticated Origin Pulls → **Zone-level** → **Upload certificate** com o certificado de cliente e a chave dele (assinados pela CA de `origin/aop-ca.pem`; o mesmo par serve para todas as zonas) e ligue o toggle.
 3. Ajuste o resto da Cloudflare (tabela abaixo, **em cada zona**) e o firewall do provedor (só 443, só faixas da Cloudflare).
 4. `docker compose up -d` (ou deploy pela URL deste `docker-compose.yml`).
